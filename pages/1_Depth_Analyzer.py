@@ -211,8 +211,8 @@ def intensity_to_depth(
     denom = hi - lo
     norm = (clipped - lo) / (denom if denom > 1e-9 else 1.0)
 
-    # 4. bright = high Z  →  norm is already 0→1 where 1 = bright = high
-    depth = norm * scale
+    # 4. Reversed logic based on user preference: dark = high Z, bright = low Z
+    depth = (1.0 - norm) * scale
 
     return depth.astype(np.float32), norm.astype(np.float32)
 
