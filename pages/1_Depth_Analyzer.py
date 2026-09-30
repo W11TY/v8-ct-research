@@ -211,8 +211,8 @@ def intensity_to_depth(
     denom = hi - lo
     norm = (clipped - lo) / (denom if denom > 1e-9 else 1.0)
 
-    # 4. Reversed logic based on user preference: dark = high Z, bright = low Z
-    depth = (1.0 - norm) * scale
+    # 4. bright = high Z  →  norm is already 0→1 where 1 = bright = high
+    depth = norm * scale
 
     return depth.astype(np.float32), norm.astype(np.float32)
 
@@ -293,6 +293,7 @@ def make_3d_surface(
                 title=dict(text="Y (px)", font=dict(color="#94a3b8")),
                 showbackground=False, gridcolor="#1e293b",
                 tickfont=dict(color="#64748b"),
+                autorange="reversed",
             ),
             zaxis=dict(
                 title=dict(text="Depth", font=dict(color="#94a3b8")),
