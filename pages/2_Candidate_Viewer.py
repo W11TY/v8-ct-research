@@ -38,6 +38,10 @@ from utils.evaluation import (
     make_patient_split,
 )
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 👨‍💻 Creator")
+st.sidebar.markdown("**AKSHAT TIWARI**")
+st.sidebar.markdown("---")
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""

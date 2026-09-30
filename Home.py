@@ -11,6 +11,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 👨‍💻 Creator")
+st.sidebar.markdown("**AKSHAT TIWARI**")
+st.sidebar.markdown("---")
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
@@ -149,7 +154,8 @@ mode when comparing against ground-truth research labels.
 
 # ── FOOTER ────────────────────────────────────────────────────────────────────
 st.markdown("<br>", unsafe_allow_html=True)
-c1, c2, c3 = st.columns(3)
-c1.markdown("**Stack:** Python · Streamlit · Plotly · NiBabel · SciPy")
+c1, c2, c3, c4 = st.columns(4)
+c1.markdown("**Stack:** Python · Streamlit · Plotly")
 c2.markdown("**Data:** PLC-CECT (PhysioNet)")
 c3.markdown("**Status:** Research prototype v0.1")
+c4.markdown("**Creator:** AKSHAT TIWARI")

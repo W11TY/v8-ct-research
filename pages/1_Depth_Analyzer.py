@@ -17,6 +17,10 @@ import plotly.graph_objects as go
 from scipy.ndimage import gaussian_filter
 from utils.io import load_image_as_array, load_nifti
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 👨‍💻 Creator")
+st.sidebar.markdown("**AKSHAT TIWARI**")
+st.sidebar.markdown("---")
 
 # ── CUSTOM CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
