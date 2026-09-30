@@ -28,6 +28,7 @@ from utils.nifti_checks import (
     check_mask_compatibility,
     check_hu_plausibility,
     phases_are_registered,
+    PhaseMisalignmentError
 )
 from utils.visualization import get_2d_slice
 from utils.anomaly_3d import propose_3d_candidates
@@ -35,7 +36,6 @@ from utils.enhancement import compute_multiphase_enhancement
 from utils.evaluation import (
     compute_voxelwise_metrics,
     compute_lesion_level_metrics,
-    make_patient_split,
 )
 
 # ── PAGE CONFIG ────────────────────────────────────────────────────────────────
@@ -228,10 +228,14 @@ geom_warnings: list[str] = []
 cross_phase_ok = False
 
 if len(loaded_phases) >= 2:
-    geom_warnings += check_geometry_consistency(
-        list(loaded_phases.values()), list(loaded_phases.keys())
-    )
-    cross_phase_ok = phases_are_registered(loaded_phases)
+    try:
+        geom_warnings += check_geometry_consistency(
+            list(loaded_phases.values()), list(loaded_phases.keys()), raise_on_misalignment=True
+        )
+        cross_phase_ok = phases_are_registered(loaded_phases)
+    except PhaseMisalignmentError as e:
+        geom_warnings.append(str(e))
+        cross_phase_ok = False
 
 if liver_nifti is not None:
     geom_warnings += check_mask_compatibility(
@@ -397,17 +401,24 @@ with tab_detect:
 
     # Run detection
     with st.spinner("Running 3D anomaly proposal… (may take 20–60s for large volumes)"):
+        # Build UI config override
+        from utils.config import load_config
+        ui_config = load_config("config.json")
+        ui_config.update({
+            "z_score_thresh": z_thresh,
+            "direction": direction_key,
+            "smooth_sigma_mm": smooth_mm,
+            "open_radius_mm": open_mm,
+            "min_vol_mm3": float(min_vol),
+            "max_vol_mm3": float(max_vol),
+            "suppress_vessels": suppress_vessels,
+        })
+        
         candidates = propose_3d_candidates(
             volume=vol,
             liver_mask=liver_mask,
             spacing_mm=spacing,
-            z_score_thresh=z_thresh,
-            direction=direction_key,
-            smooth_sigma_mm=smooth_mm,
-            open_radius_mm=open_mm,
-            min_vol_mm3=float(min_vol),
-            max_vol_mm3=float(max_vol),
-            suppress_vessels=suppress_vessels,
+            config=ui_config
         )
 
     # Multiphase enhancement scoring
@@ -435,6 +446,7 @@ with tab_detect:
                     phases=phases,
                     liver_mask=liver_mask,
                     spacing_mm=spacing,
+                    config=ui_config
                 )
                 updated.append(c_updated)
             candidates = updated

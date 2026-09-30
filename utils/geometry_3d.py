@@ -7,26 +7,20 @@ All physical quantities are computed in mm or mm³ using the NIfTI spacing metad
 
 import numpy as np
 import math
-from scipy.ndimage import label, center_of_mass, binary_opening, binary_erosion
-from typing import Optional
+import logging
+from scipy.ndimage import label, center_of_mass
+from skimage.measure import marching_cubes, mesh_surface_area
+from typing import Optional, Tuple, List, Dict
+from utils.config import load_config
 
+logger = logging.getLogger(__name__)
 
 def make_spacing_aware_ball(radius_mm: float, spacing_mm: tuple) -> np.ndarray:
     """
     Create a 3D binary ellipsoid structuring element that represents a sphere
     of physical radius `radius_mm`, respecting anisotropic voxel spacing.
-
-    Parameters
-    ----------
-    radius_mm  : physical radius in mm
-    spacing_mm : (sz, sy, sx) voxel spacing in mm
-
-    Returns
-    -------
-    3D boolean array — True inside the ellipsoid
     """
     sz, sy, sx = spacing_mm
-    # Number of voxels along each axis for the given physical radius
     rz = max(1, int(round(radius_mm / sz)))
     ry = max(1, int(round(radius_mm / sy)))
     rx = max(1, int(round(radius_mm / sx)))
@@ -41,82 +35,51 @@ def make_spacing_aware_ball(radius_mm: float, spacing_mm: tuple) -> np.ndarray:
 
 
 def spacing_aware_open(binary_vol: np.ndarray, radius_mm: float, spacing_mm: tuple) -> np.ndarray:
-    """
-    Binary morphological opening with a physically-sized ball structuring element.
-    Removes connected components smaller than radius_mm; smooths boundaries.
-    """
+    from scipy.ndimage import binary_opening
     se = make_spacing_aware_ball(radius_mm, spacing_mm)
     return binary_opening(binary_vol, structure=se).astype(np.uint8)
 
 
-def compute_surface_area_voxels(mask_3d: np.ndarray) -> float:
+def compute_sphericity_marching_cubes(mask_3d: np.ndarray, spacing_mm: tuple, volume_mm3: float, min_voxels: int) -> Tuple[float, bool]:
     """
-    Estimate voxel-count surface area of a binary mask using erosion difference.
-    Used internally for sphericity; not a true physical surface area.
+    Compute sphericity using marching cubes to calculate physical surface area.
+    Pads the mask to ensure closed surfaces.
+    Falls back to a voxel-based approximation for tiny components.
+    
+    Returns (sphericity, fallback_flag). NaN if tiny.
     """
-    eroded = binary_erosion(mask_3d)
-    surface = mask_3d.astype(bool) & ~eroded
-    return float(surface.sum())
-
-
-def compute_sphericity(volume_mm3: float, surface_area_vox: float, spacing_mm: tuple) -> float:
-    """
-    3D sphericity: ratio of surface area of an equivalent sphere to actual surface area.
-    sphericity = π^(1/3) * (6V)^(2/3) / A
-
-    Parameters
-    ----------
-    volume_mm3       : physical volume in mm³
-    surface_area_vox : voxel-count surface area (from compute_surface_area_voxels)
-    spacing_mm       : (sz, sy, sx) for converting voxel surface area to mm²
-
-    Returns float in (0, 1] — 1.0 = perfect sphere
-    """
-    if surface_area_vox <= 0 or volume_mm3 <= 0:
-        return 0.0
-
-    # Convert voxel surface count to mm² (approximate: each surface voxel contributes
-    # an area proportional to the smallest face of the voxel)
-    sz, sy, sx = spacing_mm
-    min_face = min(sz * sy, sy * sx, sz * sx)
-    surface_area_mm2 = surface_area_vox * min_face
-
+    if volume_mm3 <= 0 or mask_3d.sum() < min_voxels:
+        logger.debug(f"Component too small for marching cubes (<{min_voxels} voxels). Returning NaN.")
+        return float('nan'), True
+    
+    # Pad mask to close boundaries
+    padded_mask = np.pad(mask_3d, pad_width=1, mode='constant', constant_values=0)
+    
     try:
+        verts, faces, normals, values = marching_cubes(padded_mask, level=0.5, spacing=spacing_mm)
+        surface_area_mm2 = mesh_surface_area(verts, faces)
+        
+        if surface_area_mm2 <= 0:
+            return float('nan'), True
+            
         sphere_surface = math.pi**(1/3) * (6 * volume_mm3)**(2/3)
-        return float(min(1.0, sphere_surface / surface_area_mm2))
-    except (ZeroDivisionError, ValueError):
-        return 0.0
+        return float(min(1.0, sphere_surface / surface_area_mm2)), False
+    except (ValueError, RuntimeError) as e:
+        logger.warning(f"Marching cubes failed ({e}), fallback used.")
+        return float('nan'), True
 
 
 def label_3d_components(
     binary_vol: np.ndarray,
     spacing_mm: tuple,
-    min_vol_mm3: float = 0.0,
-    max_vol_mm3: float = float("inf"),
+    config: dict
 ) -> tuple[np.ndarray, list[dict]]:
-    """
-    Label 3D connected components and compute spacing-aware physical measurements.
-
-    Parameters
-    ----------
-    binary_vol  : 3D binary array
-    spacing_mm  : (sz, sy, sx) voxel spacing in mm
-    min_vol_mm3 : components below this volume are flagged, not removed
-    max_vol_mm3 : components above this volume are flagged, not removed
-
-    Returns
-    -------
-    labeled_vol : 3D int array — each component gets a unique integer label
-    components  : list of component dicts (see below)
-
-    Component dict keys:
-        id, voxel_count, volume_mm3, equivalent_diameter_mm,
-        centroid_voxel, bbox_voxel (z_range, y_range, x_range),
-        sphericity, size_flag ('ok' | 'small' | 'large'),
-        surface_area_vox
-    """
     sz, sy, sx = spacing_mm
     voxel_vol_mm3 = sz * sy * sx
+    
+    min_vol_mm3 = config.get("min_vol_mm3", 100.0)
+    max_vol_mm3 = config.get("max_vol_mm3", 200000.0)
+    sphericity_min_voxels = config.get("sphericity_min_voxels", 4)
 
     labeled_vol, n = label(binary_vol > 0)
     components = []
@@ -128,12 +91,15 @@ def label_3d_components(
         diameter_mm = 2.0 * (3 * volume_mm3 / (4 * math.pi))**(1/3)
 
         centroid = center_of_mass(mask_i)
+        
+        # Bounding box
         coords = np.argwhere(mask_i)
         z_min, y_min, x_min = coords.min(axis=0).tolist()
         z_max, y_max, x_max = coords.max(axis=0).tolist()
-
-        surface_vox = compute_surface_area_voxels(mask_i)
-        sph = compute_sphericity(volume_mm3, surface_vox, spacing_mm)
+        
+        # Extract small bounding box for marching cubes
+        bbox_mask = mask_i[z_min:z_max+1, y_min:y_max+1, x_min:x_max+1]
+        sph, fallback = compute_sphericity_marching_cubes(bbox_mask, spacing_mm, volume_mm3, sphericity_min_voxels)
 
         if volume_mm3 < min_vol_mm3:
             size_flag = "small"
@@ -141,6 +107,10 @@ def label_3d_components(
             size_flag = "large"
         else:
             size_flag = "ok"
+            
+        # Compactness: volume / bounding_box_volume
+        bbox_vol_mm3 = (z_max - z_min + 1)*sz * (y_max - y_min + 1)*sy * (x_max - x_min + 1)*sx
+        compactness = volume_mm3 / bbox_vol_mm3 if bbox_vol_mm3 > 0 else 0.0
 
         components.append({
             "id": i,
@@ -148,14 +118,17 @@ def label_3d_components(
             "volume_mm3": round(volume_mm3, 2),
             "equivalent_diameter_mm": round(diameter_mm, 2),
             "centroid_voxel": tuple(int(round(c)) for c in centroid),
+            "centroid_mm": (centroid[0]*sz, centroid[1]*sy, centroid[2]*sx),
             "bbox_voxel": (
                 (z_min, z_max),
                 (y_min, y_max),
                 (x_min, x_max),
             ),
-            "sphericity": round(sph, 4),
+            "_mask_crop": bbox_mask,
+            "sphericity": round(sph, 4) if not math.isnan(sph) else sph,
+            "sphericity_fallback": fallback,
+            "compactness": round(compactness, 4),
             "size_flag": size_flag,
-            "surface_area_vox": int(surface_vox),
         })
 
     return labeled_vol, components

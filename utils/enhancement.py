@@ -58,7 +58,7 @@ def compute_multiphase_enhancement(
     phases: dict,                      # {'plain': nifti_dict, 'arterial': ..., ...}
     liver_mask: np.ndarray,
     spacing_mm: tuple,
-    thresholds: Optional[dict] = None,
+    config: Optional[dict] = None,
 ) -> dict:
     """
     Measure raw HU at a candidate's location across all provided CT phases
@@ -78,7 +78,14 @@ def compute_multiphase_enhancement(
     Updated candidate dict with multiphase fields populated.
     Enhancement pattern is a research label, not a clinical diagnosis.
     """
-    thresh = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    if config is None:
+        from utils.config import DEFAULT_CONFIG
+        config = DEFAULT_CONFIG
+    
+    thresh = {
+        "relative_arterial_enhancement_min_hu": config.get("relative_arterial_enhancement_min_hu", 10.0),
+        "relative_washout_min_hu": config.get("relative_washout_min_hu", 5.0)
+    }
     updated = dict(candidate)
 
     # Sample HU in each phase
